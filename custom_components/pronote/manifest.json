@@ -12,5 +12,5 @@
     "pronotepy==2.14.3",
     "python-slugify==8.0.4"
   ],
-  "version": "0.15.5"
+  "version": "2.1.0"
 }
