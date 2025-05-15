@@ -23,6 +23,9 @@ from .const import (
     DEFAULT_LUNCH_BREAK_TIME,
 )
 
+import logging
+_LOGGER = logging.getLogger(__name__)
+
 
 def len_or_none(data):
     return None if data is None else len(data)
@@ -287,6 +290,7 @@ class PronoteTimetableSensor(PronoteGenericSensor):
         self._end_at = None
         self._lunch_break_start_at = None
         self._lunch_break_end_at = None
+           
 
     @property
     def extra_state_attributes(self):
@@ -315,22 +319,22 @@ class PronoteTimetableSensor(PronoteGenericSensor):
             for lesson in lessons:
                 index = lessons.index(lesson)
                 if not (
-                        lesson.start == lessons[index - 1].start and lesson.canceled is True
+                        lesson['start_at'] == lessons[index - 1]['start_at'] and lesson['canceled'] is True
                 ):
-                    attributes.append(format_lesson(lesson, lunch_break_time))
-                if lesson.canceled is False and self._start_at is None:
-                    self._start_at = lesson.start
-                if lesson.canceled is True:
+                    attributes.append(lesson)
+                if lesson['canceled'] is False and self._start_at is None:
+                    self._start_at = lesson['start_at']
+                if lesson['canceled'] is True:
                     canceled_counter += 1
-                if single_day is True and lesson.canceled is False:
-                    self._end_at = lesson.end
-                    if lesson.end.time() < lunch_break_time:
-                        self._lunch_break_start_at = lesson.end
+                if single_day is True and lesson['canceled'] is False:
+                    self._end_at = lesson['end_at']
+                    if lesson['end_at'].time() < lunch_break_time:
+                        self._lunch_break_start_at = lesson['end_at']
                     if (
                             self._lunch_break_end_at is None
-                            and lesson.start.time() >= lunch_break_time
+                            and lesson['start_at'].time() >= lunch_break_time
                     ):
-                        self._lunch_break_end_at = lesson.start
+                        self._lunch_break_end_at = lesson['start_at']
 
         result = super().extra_state_attributes | {
             "updated_at": self.coordinator.last_update_success_time,

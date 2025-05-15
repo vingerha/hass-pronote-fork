@@ -26,6 +26,7 @@ from .const import (
     EVENT_TYPE,
     DEFAULT_REFRESH_INTERVAL,
     DEFAULT_ALARM_OFFSET,
+    DEFAULT_LUNCH_BREAK_TIME
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -100,6 +101,30 @@ def get_overall_average(period):
             "Error getting overall average from period (%s): %s", period.name, ex
         )
         return None
+
+def get_lesson_content(client, _days_start, _days_end, lunch_break_time):
+    lessons = client.lessons(date.today()+ timedelta(days = _days_start), date.today()+ timedelta(days = _days_end))
+    _lessons = []
+    _lesson = {}
+    if lessons:
+        for lesson in lessons:
+            _lesson = (format_lesson(lesson, lunch_break_time))
+            if lesson.content: 
+                _lesson["content"]={
+                    "title": lesson.content.title,
+                    "description": lesson.content.description,
+                    "category": lesson.content.category                
+                }
+            else:
+                _lesson["content"]={
+                    "title": None,
+                    "description": None,
+                    "category": None                
+                }
+            _lessons.append(_lesson)
+        return _lessons
+    return {}
+            
 
 
 class PronoteDataUpdateCoordinator(TimestampDataUpdateCoordinator):
@@ -180,12 +205,19 @@ class PronoteDataUpdateCoordinator(TimestampDataUpdateCoordinator):
         self.data["sensor_prefix"] = re.sub("[^A-Za-z]", "_", child_info.name.lower())
 
         # Lessons
+        lunch_break_time = datetime.strptime(
+            self.config_entry.options.get(
+                "lunch_break_time", DEFAULT_LUNCH_BREAK_TIME
+            ),
+            "%H:%M",
+        ).time()
         try:
             lessons_today = await self.hass.async_add_executor_job(
-                client.lessons, today
-            )
+                get_lesson_content, client, 0, 1, lunch_break_time
+            )  
+                    
             self.data["lessons_today"] = sorted(
-                lessons_today, key=lambda lesson: lesson.start
+                lessons_today, key=lambda lesson: lesson['start_at']
             )
         except Exception as ex:
             self.data["lessons_today"] = None
@@ -193,10 +225,10 @@ class PronoteDataUpdateCoordinator(TimestampDataUpdateCoordinator):
 
         try:
             lessons_tomorrow = await self.hass.async_add_executor_job(
-                client.lessons, today + timedelta(days=1)
+                get_lesson_content, client, 1, 2 , lunch_break_time
             )
             self.data["lessons_tomorrow"] = sorted(
-                lessons_tomorrow, key=lambda lesson: lesson.start
+                lessons_tomorrow, key=lambda lesson: lesson['start_at']
             )
         except Exception as ex:
             self.data["lessons_tomorrow"] = None
@@ -207,7 +239,7 @@ class PronoteDataUpdateCoordinator(TimestampDataUpdateCoordinator):
         while True and delta > 0:
             try:
                 lessons_period = await self.hass.async_add_executor_job(
-                    client.lessons, today, today + timedelta(days=delta)
+                    get_lesson_content, client, 0, delta, lunch_break_time
                 )
             except Exception as ex:
                 _LOGGER.debug(
@@ -220,7 +252,7 @@ class PronoteDataUpdateCoordinator(TimestampDataUpdateCoordinator):
             f"Lessons found at: {delta} days, for a maximum of {LESSON_MAX_DAYS} from today"
         )
         self.data["lessons_period"] = (
-            sorted(lessons_period, key=lambda lesson: lesson.start)
+            sorted(lessons_period, key=lambda lesson: lesson['start_at'])
             if lessons_period is not None
             else None
         )
@@ -235,7 +267,7 @@ class PronoteDataUpdateCoordinator(TimestampDataUpdateCoordinator):
                 delta = 2
                 while True and delta < LESSON_NEXT_DAY_SEARCH_LIMIT:
                     lessons_nextday = await self.hass.async_add_executor_job(
-                        client.lessons, today + timedelta(days=delta)
+                        get_lesson_content, client, 0, delta, lunch_break_time
                     )
                     if lessons_nextday:
                         break
@@ -244,7 +276,7 @@ class PronoteDataUpdateCoordinator(TimestampDataUpdateCoordinator):
                         del lessons_nextday
                     delta = delta + 1
                 self.data["lessons_next_day"] = sorted(
-                    lessons_nextday, key=lambda lesson: lesson.start
+                    lessons_nextday, key=lambda lesson: lesson['start_at']
                 )
                 lessons_nextday = None
                 del lessons_nextday
@@ -311,8 +343,8 @@ class PronoteDataUpdateCoordinator(TimestampDataUpdateCoordinator):
         try:
             information_and_surveys = await self.hass.async_add_executor_job(
                 client.information_and_surveys,
-                today - timedelta(days=INFO_SURVEY_LIMIT_MAX_DAYS),
-                )
+                datetime.combine(today - timedelta(days=INFO_SURVEY_LIMIT_MAX_DAYS),datetime.min.time()),
+            )
             self.data["information_and_surveys"] = sorted(
                 information_and_surveys,
                 key=lambda information_and_survey: information_and_survey.creation_date,
