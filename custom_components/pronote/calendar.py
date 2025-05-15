@@ -9,10 +9,9 @@ from zoneinfo import ZoneInfo
 
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .coordinator import PronoteDataUpdateCoordinator
-from .pronote_formatter import format_displayed_lesson
+from .pronote_formatter import format_displayed_lesson_dict
 
 from .const import DOMAIN
-
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -23,9 +22,7 @@ async def async_setup_entry(
     coordinator: PronoteDataUpdateCoordinator = hass.data[DOMAIN][
         config_entry.entry_id
     ]["coordinator"]
-
     await coordinator.async_config_entry_first_refresh()
-
     async_add_entities([PronoteCalendar(coordinator, config_entry)], False)
 
 
@@ -33,17 +30,16 @@ async def async_setup_entry(
 def async_get_calendar_event_from_lessons(lesson, timezone) -> CalendarEvent:
     """Get a HASS CalendarEvent from a Pronote Lesson."""
     tz = ZoneInfo(timezone)
-
-    lesson_name = format_displayed_lesson(lesson)
-    if lesson.canceled:
+    lesson_name = format_displayed_lesson_dict(lesson)
+    if lesson['canceled']:
         lesson_name = f"Annulé - {lesson_name}"
 
     return CalendarEvent(
         summary=lesson_name,
-        description=f"{lesson.teacher_name} - Salle {lesson.classroom}",
-        location=f"Salle {lesson.classroom}",
-        start=lesson.start.replace(tzinfo=tz),
-        end=lesson.end.replace(tzinfo=tz),
+        description=f"{lesson['teacher_name']} - Salle {lesson['classroom']}",
+        location=f"Salle {lesson['classroom']}",
+        start=lesson['start_at'].replace(tzinfo=tz),
+        end=lesson['end_at'].replace(tzinfo=tz),
     )
 
 
@@ -90,7 +86,7 @@ class PronoteCalendar(CoordinatorEntity, CalendarEntity):
 
             now = datetime.now()
             current_event = next(
-                event for event in lessons if event.start >= now and now < event.end
+                event for event in lessons if event['start_at'] >= now and now < event['end_at']
             )
         except StopIteration:
             self._event = None
@@ -111,7 +107,7 @@ class PronoteCalendar(CoordinatorEntity, CalendarEntity):
         return [
             async_get_calendar_event_from_lessons(event, hass.config.time_zone)
             for event in filter(
-                lambda lesson: lesson.canceled == False,
+                lambda lesson: lesson['canceled'] == False,
                 self.coordinator.data["lessons_period"],
             )
         ]

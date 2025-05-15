@@ -17,6 +17,13 @@ def format_displayed_lesson(lesson):
     if lesson.subject:
         return lesson.subject.name
     return "autre"
+    
+def format_displayed_lesson_dict(lesson):
+    if lesson['detention'] is True:
+        return "RETENUE"
+    if lesson.get('lesson', None):
+        return lesson['lesson']
+    return "autre"    
 
 
 def format_lesson(lesson, lunch_break_time):
