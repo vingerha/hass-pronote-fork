@@ -427,7 +427,10 @@ class PronoteDataUpdateCoordinator(TimestampDataUpdateCoordinator):
             for period in raw_periods:
                 if (
                         period.name.lower().startswith(period_type)
-                        and period.start < raw_current_period.start
+                        and (
+                            self.config_entry.options.get("show_all_periods", False)
+                            or period.start < raw_current_period.start
+                        )                        
                 ):
                     raw_previous_periods.append(period)
                     period_key = slugify(period.name, separator="_")

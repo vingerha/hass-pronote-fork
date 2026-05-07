@@ -334,7 +334,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                         default=config_entry.options.get(
                             "show_all_periods", DEFAULT_SHOW_ALL_PERIODS
                         ),
-                    ): bool,                    
+                    ): bool,
                 }
             ),
         )

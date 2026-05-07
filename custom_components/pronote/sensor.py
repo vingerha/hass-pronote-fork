@@ -22,7 +22,6 @@ from .const import (
     DEFAULT_LUNCH_BREAK_TIME,
 )
 
-_LOGGER = logging.getLogger(__name__)
 
 def len_or_none(data):
     return None if data is None else len(data)
@@ -358,20 +357,15 @@ class PronoteGradesSensor(PronotePeriodRelatedSensor):
     ) -> None:
         """Initialize the Pronote sensor."""
         super().__init__(
-            coordinator, 
-            key, 
-            name, 
-            None, 
-            period_key
+            coordinator, key, name, len_or_none(coordinator.data[key]), period_key
         )
         self._key = key
-        
+
     @property
     def native_value(self):
         data = self.coordinator.data.get(self._key) or []
         limit = int(self.coordinator.config_entry.options.get("grades_to_display", 0) or 0)
-        return min(len(data), limit) if limit > 0 else len(data)
-        
+        return min(len(data), limit) if limit > 0 else len(data)             
     @property
     def extra_state_attributes(self):
         """Return the state attributes."""
@@ -384,6 +378,7 @@ class PronoteGradesSensor(PronotePeriodRelatedSensor):
                 if index_note == self.coordinator.config_entry.options.get("grades_to_display"):
                     break
                 grades.append(format_grade(grade))
+
         attributes["grades"] = grades
 
         return attributes
