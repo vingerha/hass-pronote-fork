@@ -22,7 +22,6 @@ from .const import (
     DEFAULT_LUNCH_BREAK_TIME,
 )
 
-_LOGGER = logging.getLogger(__name__)
 
 def len_or_none(data):
     return None if data is None else len(data)
@@ -195,7 +194,6 @@ class PronoteGenericSensor(CoordinatorEntity, SensorEntity):
         if device_class is not None:
             self._attr_device_class = device_class
 
-        self._child_info = coordinator.data["child_info"]
         self._account_type = coordinator.data["account_type"]
 
     @property
@@ -212,7 +210,7 @@ class PronoteGenericSensor(CoordinatorEntity, SensorEntity):
     def extra_state_attributes(self):
         """Return the state attributes."""
         return {
-            "full_name": self._child_info.name,
+            "full_name": self.coordinator.data["child_info"].name,
             "nickname": self.coordinator.config_entry.options.get("nickname"),
             "via_parent_account": self._account_type == "parent",
             "updated_at": self.coordinator.last_update_success_time,
@@ -266,8 +264,8 @@ class PronoteClassSensor(PronoteGenericSensor):
     def extra_state_attributes(self):
         """Return the state attributes."""
         return super().extra_state_attributes | {
-            "class_name": self._child_info.class_name,
-            "establishment": self._child_info.establishment,
+            "class_name": self.coordinator.data["child_info"].class_name,
+            "establishment": self.coordinator.data["child_info"].establishment,
         }
 
 
@@ -359,20 +357,15 @@ class PronoteGradesSensor(PronotePeriodRelatedSensor):
     ) -> None:
         """Initialize the Pronote sensor."""
         super().__init__(
-            coordinator, 
-            key, 
-            name, 
-            None, 
-            period_key
+            coordinator, key, name, len_or_none(coordinator.data[key]), period_key
         )
         self._key = key
-        
+
     @property
     def native_value(self):
         data = self.coordinator.data.get(self._key) or []
         limit = int(self.coordinator.config_entry.options.get("grades_to_display", 0) or 0)
-        return min(len(data), limit) if limit > 0 else len(data)
-        
+        return min(len(data), limit) if limit > 0 else len(data)             
     @property
     def extra_state_attributes(self):
         """Return the state attributes."""
@@ -385,6 +378,7 @@ class PronoteGradesSensor(PronotePeriodRelatedSensor):
                 if index_note == self.coordinator.config_entry.options.get("grades_to_display"):
                     break
                 grades.append(format_grade(grade))
+
         attributes["grades"] = grades
 
         return attributes
@@ -412,8 +406,8 @@ class PronoteHomeworkSensor(PronoteGenericSensor):
         if self.coordinator.data[self._key] is not None:
             todo_counter = 0
             for homework in self.coordinator.data[self._key]:
-                homework_attributes.append(format_homework(homework))
-                if homework.done is False:
+                homework_attributes.append(homework)
+                if homework["done"] is False:
                     todo_counter += 1
 
         attributes["homework"] = homework_attributes
@@ -541,7 +535,7 @@ class PronoteAveragesSensor(PronotePeriodRelatedSensor):
             for average in self.coordinator.data[self._key]:
                 averages.append(format_average(average))
 
-        attributes["averages"] = averages
+        attributes["averages"] = sorted(averages, key=lambda a: a["subject"])
 
         return attributes
 

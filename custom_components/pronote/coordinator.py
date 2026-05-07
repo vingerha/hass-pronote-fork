@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import logging
+from pronotepy.dataClasses import Period as PronotePeriod
 from .pronote_helper import *
 from .pronote_formatter import *
 import re
@@ -118,7 +120,6 @@ class PronoteDataUpdateCoordinator(TimestampDataUpdateCoordinator):
             ),
         )
         self.config_entry = entry
-        self._client = None
 
     async def _async_update_data(self) -> dict[Platform, dict[str, Any]]:
         """Get the latest data from Pronote and updates the state."""
@@ -157,7 +158,22 @@ class PronoteDataUpdateCoordinator(TimestampDataUpdateCoordinator):
         if client is None:
             _LOGGER.error("Unable to init pronote client")
             return None
-        
+
+        try:
+            return await self._fetch_data(client, today, previous_data)
+        finally:
+            try:
+                if hasattr(client, 'session') and client.session is not None:
+                    await self.hass.async_add_executor_job(client.session.close)
+            except Exception:
+                pass
+            # Clear the class-level set that accumulates every Period ever created
+            PronotePeriod.instances.clear()
+
+    async def _fetch_data(self, client, today, previous_data):
+        """Fetch all data from Pronote client."""
+        config_data = self.config_entry.data
+
         # Save possibly refreshed credentials
         new_creds = await self.hass.async_add_executor_job(client.export_credentials)
         new_data = self.config_entry.data.copy()
@@ -293,10 +309,11 @@ class PronoteDataUpdateCoordinator(TimestampDataUpdateCoordinator):
             get_averages, client.current_period
         )
 
-        # Homework
+        # Homework (pre-format to avoid accessing _client after strip)
         try:
             homework = await self.hass.async_add_executor_job(client.homework, today)
-            self.data["homework"] = sorted(homework, key=lambda lesson: lesson.date)
+            homework_sorted = sorted(homework, key=lambda lesson: lesson.date)
+            self.data["homework"] = [format_homework(hw) for hw in homework_sorted]
         except Exception as ex:
             self.data["homework"] = None
             _LOGGER.info("Error getting homework from pronote: %s", ex)
@@ -305,9 +322,10 @@ class PronoteDataUpdateCoordinator(TimestampDataUpdateCoordinator):
             homework_period = await self.hass.async_add_executor_job(
                 client.homework, today, today + timedelta(days=HOMEWORK_MAX_DAYS)
             )
-            self.data["homework_period"] = sorted(
+            homework_period_sorted = sorted(
                 homework_period, key=lambda homework: homework.date
             )
+            self.data["homework_period"] = [format_homework(hw) for hw in homework_period_sorted]
         except Exception as ex:
             self.data["homework_period"] = None
             _LOGGER.info("Error getting homework_period from pronote: %s", ex)
@@ -384,53 +402,82 @@ class PronoteDataUpdateCoordinator(TimestampDataUpdateCoordinator):
         )
 
         # Periods
+        raw_periods = None
+        raw_current_period = None
         try:
-            self.data["periods"] = client.periods
+            raw_periods = client.periods
         except Exception as ex:
-            self.data["periods"] = None
             _LOGGER.info("Error getting periods from pronote: %s", ex)
         try:
-            self.data["current_period"] = client.current_period
-            self.data["current_period_key"] = client.current_period_key = slugify(
-                client.current_period.name, separator="_"
+            raw_current_period = client.current_period
+            self.data["current_period_key"] = slugify(
+                raw_current_period.name, separator="_"
             )
         except Exception as ex:
-            self.data["current_period"] = None
             _LOGGER.info("Error getting current period from pronote: %s", ex)
 
         # determine previous periods (handle only trimestres and semestres)
         supported_period_types = ["trimestre", "semestre"]
         period_type = None
-        if self.data["current_period"] is not None:
-            period_type = self.data["current_period"].name.split(" ")[0].lower()
+        raw_previous_periods = []
+        if raw_current_period is not None:
+            period_type = raw_current_period.name.split(" ")[0].lower()
 
-        if period_type in supported_period_types:
-            for period in self.data["periods"]:
+        if period_type in supported_period_types and raw_periods is not None:
+            for period in raw_periods:
                 if (
                         period.name.lower().startswith(period_type)
                         and (
                             self.config_entry.options.get("show_all_periods", False)
-                            or period.start < self.data["current_period"].start
-                        )
+                            or period.start < raw_current_period.start
+                        )                        
                 ):
-                    self.data["previous_periods"].append(period)
+                    raw_previous_periods.append(period)
                     period_key = slugify(period.name, separator="_")
 
                     self.data[
                         f"grades_{period_key}"
                     ] = await self.hass.async_add_executor_job(get_grades, period)
+                    self.compare_data(
+                        previous_data,
+                        f"grades_{period_key}",
+                        ["date", "subject", "grade_out_of"],
+                        "new_grade",
+                        format_grade,
+                    )
                     self.data[
                         f"averages_{period_key}"
                     ] = await self.hass.async_add_executor_job(get_averages, period)
                     self.data[
                         f"absences_{period_key}"
                     ] = await self.hass.async_add_executor_job(get_absences, period)
+                    self.compare_data(
+                        previous_data,
+                        f"absences_{period_key}",
+                        ["from", "to"],
+                        "new_absence",
+                        format_absence,
+                    )
                     self.data[
                         f"delays_{period_key}"
                     ] = await self.hass.async_add_executor_job(get_delays, period)
+                    self.compare_data(
+                        previous_data,
+                        f"delays_{period_key}",
+                        ["date", "minutes"],
+                        "new_delay",
+                        format_delay,
+                    )
                     self.data[
                         f"evaluations_{period_key}"
                     ] = await self.hass.async_add_executor_job(get_evaluations, period)
+                    self.compare_data(
+                        previous_data,
+                        f"evaluations_{period_key}",
+                        ["name", "date", "subject"],
+                        "new_evaluation",
+                        format_evaluation,
+                    )
                     self.data[
                         f"punishments_{period_key}"
                     ] = await self.hass.async_add_executor_job(get_punishments, period)
@@ -440,9 +487,29 @@ class PronoteDataUpdateCoordinator(TimestampDataUpdateCoordinator):
                         get_overall_average, period
                     )
 
-        self.data["active_periods"] = self.data["previous_periods"] + [
-            self.data["current_period"]
+        # Serialize periods to plain objects (drops back-references to client)
+        self.data["periods"] = (
+            [_serialize_period(p) for p in raw_periods]
+            if raw_periods is not None
+            else None
+        )
+        self.data["current_period"] = (
+            _serialize_period(raw_current_period)
+            if raw_current_period is not None
+            else None
+        )
+        self.data["previous_periods"] = [
+            _serialize_period(p) for p in raw_previous_periods
         ]
+        self.data["active_periods"] = self.data["previous_periods"] + (
+            [self.data["current_period"]]
+            if self.data["current_period"] is not None
+            else []
+        )
+
+        # Strip _client back-references to allow GC of the client object graph
+        for value in self.data.values():
+            _strip_client_refs(value)
 
         return self.data
 
@@ -451,8 +518,8 @@ class PronoteDataUpdateCoordinator(TimestampDataUpdateCoordinator):
     ):
         if (
                 previous_data is not None
-                and previous_data[data_key] is not None
-                and self.data[data_key] is not None
+                and previous_data.get(data_key) is not None
+                and self.data.get(data_key) is not None
         ):
             not_found_items = []
             for item in self.data[data_key]:
@@ -477,3 +544,57 @@ class PronoteDataUpdateCoordinator(TimestampDataUpdateCoordinator):
             "data": event_data,
         }
         self.hass.bus.async_fire(EVENT_TYPE, event_data)
+
+
+def _serialize_period(period) -> SimpleNamespace:
+    """Convert a pronotepy Period to a plain object without client back-references."""
+    return SimpleNamespace(
+        name=period.name,
+        start=period.start,
+        end=period.end,
+    )
+
+
+def _strip_client_refs(obj, _visited=None):
+    """Null out _client back-references on pronotepy objects to allow GC of the client."""
+    if _visited is None:
+        _visited = set()
+    obj_id = id(obj)
+    if obj_id in _visited:
+        return
+    if isinstance(obj, (str, int, float, bool, type(None), datetime, date, timedelta, SimpleNamespace)):
+        return
+    _visited.add(obj_id)
+
+    if isinstance(obj, (list, tuple)):
+        for item in obj:
+            _strip_client_refs(item, _visited)
+        return
+
+    if isinstance(obj, dict):
+        for val in obj.values():
+            _strip_client_refs(val, _visited)
+        return
+
+    # Null _client if present
+    if hasattr(obj, '_client'):
+        try:
+            obj._client = None
+        except (AttributeError, TypeError):
+            pass
+
+    # Recurse into sub-objects via __slots__ and __dict__
+    for cls in type(obj).__mro__:
+        for slot in getattr(cls, '__slots__', ()):
+            if slot == '_client':
+                continue
+            try:
+                val = getattr(obj, slot)
+            except AttributeError:
+                continue
+            if val is not None and not callable(val):
+                _strip_client_refs(val, _visited)
+
+    for val in getattr(obj, '__dict__', {}).values():
+        if val is not None and not callable(val):
+            _strip_client_refs(val, _visited)
